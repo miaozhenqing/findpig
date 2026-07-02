@@ -1,2 +1,27 @@
-/.idea/
-/.idea/
+# IDE - IntelliJ / GoLand
+.idea/
+*.iml
+
+# Go build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Go test cache & coverage
+*.test
+*.out
+coverage.html
+
+# Go module download cache (local vendor is fine to commit if used)
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
