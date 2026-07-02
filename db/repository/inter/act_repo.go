@@ -11,6 +11,10 @@ type ActRepo interface {
 
 	InsertByBatch(mainId int, acts []*model.ActEntity) (int64, error)
 
+	AddByBatch(mainToEntityMap map[int][]*model.ActEntity) (int64, error)
+
+	UpdateByBatch(mainToEntityMap map[int][]*model.ActEntity) (int64, error)
+
 	Insert(mainId int, act *model.ActEntity) error
 
 	CreateTableIfNotExist(tableName string) error

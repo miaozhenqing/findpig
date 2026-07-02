@@ -25,21 +25,24 @@ func (cw ContextWrapper[T]) GetActivity() *model.ActEntity {
 }
 
 type DataManager struct {
-	TableCache      *cache.Cache
-	ActRepo         inter.ActRepo
-	ActEntityCache  []*model.ActEntity
-	InitSelectFlag  bool
-	ContextWrappers []*ContextWrapper[any]
+	TableCache        *cache.Cache
+	ActRepo           inter.ActRepo
+	MainToEntityCache map[int][]*model.ActEntity
+	InitSelectFlag    bool
+	ContextWrappers   []*ContextWrapper[any]
 }
 
 func (dm *DataManager) GetActivity(userId int64, createIfNotExists bool, wrapper *SubWrapper) *model.ActEntity {
 	dm.TryToInitSelect(userId)
 	var res *model.ActEntity
-	if dm.ActEntityCache != nil {
-		for _, entity := range dm.ActEntityCache {
-			if entity.MainID == wrapper.MainId && entity.SubID == wrapper.Id && entity.UserID == userId {
-				res = entity
-				break
+	if dm.MainToEntityCache != nil {
+		entities := dm.MainToEntityCache[wrapper.MainId]
+		if entities != nil {
+			for _, entity := range entities {
+				if entity.SubID == wrapper.Id && entity.UserID == userId {
+					res = entity
+					break
+				}
 			}
 		}
 
@@ -52,7 +55,7 @@ func (dm *DataManager) GetActivity(userId int64, createIfNotExists bool, wrapper
 			if err != nil {
 				panic(err)
 			}
-			dm.ActEntityCache = append(dm.ActEntityCache, entity)
+			dm.MainToEntityCache[wrapper.MainId] = append(dm.MainToEntityCache[wrapper.MainId], entity)
 			res = entity
 		}
 	}
@@ -70,9 +73,28 @@ func NewDataManager(tc *cache.Cache, actRepo inter.ActRepo) *DataManager {
 }
 
 func (dm *DataManager) UpdateDirtyActivity() {
-	//for i, entity := range dm.ActEntityCache {
-	//
-	//}
+	dirtyMap := make(map[int][]*model.ActEntity)
+	for mainId, entities := range dm.MainToEntityCache {
+		var dirtyEntities []*model.ActEntity
+		for _, entity := range entities {
+			if entity.Dirty {
+				entity.Post()
+				entity.Dirty = false
+				dirtyEntities = append(dirtyEntities, entity)
+			}
+		}
+		// 只有存在 dirty 数据时才加入最终 map
+		if len(dirtyEntities) > 0 {
+			dirtyMap[mainId] = dirtyEntities
+		}
+	}
+	if len(dirtyMap) == 0 {
+		return
+	}
+	_, err := dm.ActRepo.UpdateByBatch(dirtyMap)
+	if err != nil {
+		panic(err)
+	}
 }
 func (dm *DataManager) TryToInitSelect(userId int64) {
 	if dm.InitSelectFlag {
@@ -86,22 +108,25 @@ func (dm *DataManager) TryToInitSelect(userId int64) {
 		subIds := util.Map(subWrappers, func(t SubWrapper) int {
 			return t.Id
 		})
-		dbEntities, err := dm.ActRepo.SelectInReturnList(userId, mainId, subIds)
+		dbEntities, err := dm.ActRepo.SelectByMainIdMap(userId, mainId, subIds)
 		if err != nil {
 			panic(err)
 		}
-		dm.ActEntityCache = dbEntities
-		//找到数据库里面没有的
 		existSubIds := make(map[int]bool)
 		for _, entity := range dbEntities {
-			existSubIds[entity.SubID] = true
+			for _, actEntity := range entity {
+				actEntity.Init()
+				existSubIds[actEntity.SubID] = true
+			}
 		}
+		dm.MainToEntityCache = dbEntities
 		for _, subWrapper := range subWrappers {
 			if !existSubIds[subWrapper.Id] {
 				notExistSubIds[subWrapper.MainId] = append(notExistSubIds[subWrapper.MainId], subWrapper)
 			}
 		}
 	}
+	var mainToEntityMap = make(map[int][]*model.ActEntity)
 	for mainId, subWrappers := range notExistSubIds {
 		entities := make([]*model.ActEntity, 0, len(subWrappers))
 		for _, subWrapper := range subWrappers {
@@ -111,12 +136,20 @@ func (dm *DataManager) TryToInitSelect(userId int64) {
 			entity := model.NewActEntity(userId, mainId, subWrapper.Id, ruleIds)
 			entities = append(entities, entity)
 		}
-		_, err := dm.ActRepo.InsertByBatch(mainId, entities)
+		mainToEntityMap[mainId] = entities
+	}
+	if len(mainToEntityMap) > 0 {
+		_, err := dm.ActRepo.AddByBatch(mainToEntityMap)
 		if err != nil {
 			panic(err)
 		}
-		for _, entity := range entities {
-			dm.ActEntityCache = append(dm.ActEntityCache, entity)
+		// 合并新数据到缓存
+		for mainId, newEntities := range mainToEntityMap {
+			if existing, ok := dm.MainToEntityCache[mainId]; ok {
+				dm.MainToEntityCache[mainId] = append(existing, newEntities...)
+			} else {
+				dm.MainToEntityCache[mainId] = newEntities
+			}
 		}
 	}
 }

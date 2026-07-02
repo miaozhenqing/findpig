@@ -6,6 +6,7 @@ import (
 )
 
 type ActEntity struct {
+	//数据库记录字段
 	ID         int64  `json:"id"`
 	UserID     int64  `json:"user_id"`
 	MainID     int    `json:"main_id"`
@@ -16,15 +17,15 @@ type ActEntity struct {
 	CreateTime int64  `json:"create_time"`
 	ModifyTime int64  `json:"modify_time"`
 	//不记录到数据库
-	ActProgresses []*ActProgress `json:"act_progresses" db:"-"`
+	ActProgresses []*ActProgress `gorm:"-"`
 	//不记录到数据库
-	Dirty bool `json:"dirty" db:"-"`
+	Dirty bool `gorm:"-"`
 }
 
 type ActProgress struct {
-	R int   `json:"r"`
-	P any   `json:"p"`
-	T int64 `json:"t"`
+	R int `json:"r"`
+	P any `json:"p"`
+	T int `json:"t"`
 }
 
 func (act *ActEntity) Init() {
@@ -33,6 +34,12 @@ func (act *ActEntity) Init() {
 		if err != nil {
 			panic(err)
 		}
+	}
+}
+func (act *ActEntity) Post() {
+	if act.ActProgresses != nil {
+		marshal, _ := json.Marshal(act.ActProgresses)
+		act.Progress = string(marshal)
 	}
 }
 

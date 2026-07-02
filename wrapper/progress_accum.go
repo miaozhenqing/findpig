@@ -20,7 +20,13 @@ func (a AccumInt) Accum(parameter int, target int, actProg *model.ActProgress) b
 	if actProg.P == nil {
 		actProg.P = parameter
 	} else {
-		actProg.P = actProg.P.(int) + parameter
+		var old int
+		if v, ok := actProg.P.(float64); ok {
+			old = int(v)
+		} else {
+			old = actProg.P.(int)
+		}
+		actProg.P = old + parameter
 	}
 	return true
 }
@@ -28,8 +34,16 @@ func (a AccumInt) CheckCompleted(actProg *model.ActProgress, target int) bool {
 	if actProg.P == nil {
 		return false
 	}
-	return actProg.P.(int) >= target
+	var v int
+	if vf, ok := actProg.P.(float64); ok {
+		v = int(vf)
+	} else {
+		v = actProg.P.(int)
+	}
+	return v >= target
 }
+
+//todo 完成了int类型的进度累计器，下一步尝试将actProgress从actEntity剥离开来
 
 func GetAccumulatorByRule(rule int) Accumulator {
 	if rule == 1 {

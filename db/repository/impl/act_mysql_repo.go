@@ -20,7 +20,7 @@ func buildTableName(mainId int) string {
 	return fmt.Sprintf("act_%d", mainId)
 }
 
-func (a ActGormRepo) SelectInReturnList(userId int64, mainId int, subIds []int) ([]*model.ActEntity, error) {
+func (a *ActGormRepo) SelectInReturnList(userId int64, mainId int, subIds []int) ([]*model.ActEntity, error) {
 	if len(subIds) == 0 {
 		return nil, errors.New("subIds cannot be empty")
 	}
@@ -55,7 +55,7 @@ func (a *ActGormRepo) SelectByMainIdMap(userId int64, mainId int, subIds []int) 
 	return result, nil
 }
 
-func (a ActGormRepo) InsertByBatch(mainId int, acts []*model.ActEntity) (int64, error) {
+func (a *ActGormRepo) InsertByBatch(mainId int, acts []*model.ActEntity) (int64, error) {
 	if len(acts) == 0 {
 		return 0, nil
 	}
@@ -63,12 +63,71 @@ func (a ActGormRepo) InsertByBatch(mainId int, acts []*model.ActEntity) (int64, 
 	return tx.RowsAffected, tx.Error
 }
 
-func (a ActGormRepo) Insert(mainId int, act *model.ActEntity) error {
+func (a *ActGormRepo) AddByBatch(mainToEntityMap map[int][]*model.ActEntity) (int64, error) {
+	if len(mainToEntityMap) == 0 {
+		return 0, nil
+	}
+	for main, actEntities := range mainToEntityMap {
+		_, err := a.InsertByBatch(main, actEntities)
+		if err != nil {
+			//todo回滚
+			panic(fmt.Errorf("insert failed: %w", err))
+		}
+	}
+	return int64(len(mainToEntityMap)), nil
+}
+
+func (a *ActGormRepo) UpdateByBatch(mainToEntityMap map[int][]*model.ActEntity) (int64, error) {
+	if len(mainToEntityMap) == 0 {
+		return 0, nil
+	}
+
+	var totalAffected int64
+	tx := a.db.Begin()
+	if tx.Error != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	for mainId, actEntities := range mainToEntityMap {
+		if len(actEntities) == 0 {
+			continue
+		}
+
+		tableName := buildTableName(mainId)
+		// 设置正确的表名
+		db := tx.Table(tableName)
+
+		// 使用事务中的 DB 批量 Save（会触发 UPDATE）
+		result := db.Save(actEntities)
+		if result.Error != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("failed to update records in table %s: %w", tableName, result.Error)
+		}
+
+		totalAffected += result.RowsAffected
+	}
+
+	// 提交事务
+	if err := tx.Commit().Error; err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return totalAffected, nil
+}
+
+func (a *ActGormRepo) Insert(mainId int, act *model.ActEntity) error {
 	tx := a.db.Table(buildTableName(mainId)).Create(act)
 	return tx.Error
 }
 
-func (a ActGormRepo) CreateTableIfNotExist(tableName string) error {
+func (a *ActGormRepo) CreateTableIfNotExist(tableName string) error {
 	if a.db.Migrator().HasTable(tableName) {
 		return nil
 	}
@@ -83,8 +142,7 @@ func (a ActGormRepo) CreateTableIfNotExist(tableName string) error {
             update_time BIGINT NOT NULL COMMENT '进度更新时间戳',
             create_time BIGINT NOT NULL COMMENT '数据创建时间戳',
             modify_time BIGINT NOT NULL COMMENT '数据修改时间戳',
-            INDEX idx_user_id (user_id),
-            INDEX idx_main_id (main_id),
+            UNIQUE KEY uk_user_main_sub (user_id, main_id, sub_id),
             INDEX idx_sub_id (sub_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `, tableName)).Error
